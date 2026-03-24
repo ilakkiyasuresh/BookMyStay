@@ -1,6 +1,7 @@
+import java.io.*;
 import java.util.*;
 
-class Reservation {
+class Reservation implements Serializable {
     private String guestName;
     private String roomType;
     private String roomId;
@@ -11,32 +12,22 @@ class Reservation {
         this.roomId = roomId;
     }
 
-    public String getGuestName() {
-        return guestName;
-    }
-
-    public String getRoomType() {
-        return roomType;
-    }
-
-    public String getRoomId() {
-        return roomId;
-    }
+    public String getGuestName() { return guestName; }
+    public String getRoomType() { return roomType; }
+    public String getRoomId() { return roomId; }
 }
 
-class RoomInventory {
+class RoomInventory implements Serializable {
     private Map<String, Integer> inventory;
 
     public RoomInventory() {
         inventory = new HashMap<>();
-        inventory.put("Single Room", 2);
-        inventory.put("Double Room", 1);
-        inventory.put("Suite Room", 1);
+        inventory.put("Single Room", 5);
+        inventory.put("Double Room", 3);
+        inventory.put("Suite Room", 2);
     }
 
-    public int getAvailability(String type) {
-        return inventory.getOrDefault(type, 0);
-    }
+    public int getAvailability(String type) { return inventory.getOrDefault(type, 0); }
 
     public void reduceRoom(String type) throws Exception {
         int available = inventory.getOrDefault(type, 0);
@@ -48,17 +39,14 @@ class RoomInventory {
         inventory.put(type, inventory.getOrDefault(type, 0) + 1);
     }
 
-    public void displayInventory() {
-        System.out.println("Inventory: " + inventory);
-    }
+    public void displayInventory() { System.out.println("Inventory: " + inventory); }
 }
 
-class BookingService {
+class BookingService implements Serializable {
     private RoomInventory inventory;
     private Set<String> allocatedRoomIds;
     private Map<String, Set<String>> roomAllocations;
     private Map<String, Reservation> confirmedReservations;
-    private Stack<String> rollbackStack;
     private int idCounter = 1;
 
     public BookingService(RoomInventory inventory) {
@@ -66,75 +54,72 @@ class BookingService {
         allocatedRoomIds = new HashSet<>();
         roomAllocations = new HashMap<>();
         confirmedReservations = new HashMap<>();
-        rollbackStack = new Stack<>();
     }
 
     private String generateRoomId(String type) {
         String id;
-        do {
-            id = type.substring(0, 2).toUpperCase() + idCounter++;
-        } while (allocatedRoomIds.contains(id));
+        do { id = type.substring(0, 2).toUpperCase() + idCounter++; }
+        while (allocatedRoomIds.contains(id));
         return id;
     }
 
     public Reservation bookRoom(String guestName, String roomType) throws Exception {
-        if (inventory.getAvailability(roomType) <= 0) {
-            throw new Exception("Cannot book " + roomType + " for " + guestName + " (No availability)");
-        }
-
+        if (inventory.getAvailability(roomType) <= 0) throw new Exception("Cannot book " + roomType);
         String roomId = generateRoomId(roomType);
         allocatedRoomIds.add(roomId);
         roomAllocations.putIfAbsent(roomType, new HashSet<>());
         roomAllocations.get(roomType).add(roomId);
         inventory.reduceRoom(roomType);
-
         Reservation r = new Reservation(guestName, roomType, roomId);
         confirmedReservations.put(roomId, r);
-        rollbackStack.push(roomId);
-
         System.out.println("Confirmed: " + guestName + " -> " + roomType + " | Room ID: " + roomId);
         return r;
     }
 
-    public void cancelReservation(String roomId) {
-        if (!confirmedReservations.containsKey(roomId)) {
-            System.out.println("Cancellation Failed: Reservation ID " + roomId + " does not exist");
-            return;
+    public void displayAllocations() { System.out.println("Current Allocations: " + roomAllocations); }
+
+    public void saveState(String filename) throws IOException {
+        try (ObjectOutputStream out = new ObjectOutputStream(new FileOutputStream(filename))) {
+            out.writeObject(this);
         }
-
-        Reservation r = confirmedReservations.get(roomId);
-        allocatedRoomIds.remove(roomId);
-        roomAllocations.get(r.getRoomType()).remove(roomId);
-        inventory.increaseRoom(r.getRoomType());
-        confirmedReservations.remove(roomId);
-        rollbackStack.remove(roomId);
-
-        System.out.println("Cancelled: " + r.getGuestName() + " -> " + r.getRoomType() + " | Room ID: " + roomId);
     }
 
-    public void displayAllocations() {
-        System.out.println("Current Allocations: " + roomAllocations);
+    public static BookingService loadState(String filename) {
+        try (ObjectInputStream in = new ObjectInputStream(new FileInputStream(filename))) {
+            return (BookingService) in.readObject();
+        } catch (Exception e) {
+            System.out.println("No previous state found or file corrupted. Starting fresh.");
+            return null;
+        }
     }
 }
 
 public class BookMyStay {
     public static void main(String[] args) throws Exception {
+        String filename = "booking_state.ser";
 
-        RoomInventory inventory = new RoomInventory();
-        BookingService service = new BookingService(inventory);
+        BookingService service = BookingService.loadState(filename);
+        RoomInventory inventory;
+        if (service == null) {
+            inventory = new RoomInventory();
+            service = new BookingService(inventory);
+        } else {
+            inventory = service.inventory;
+        }
 
-        Reservation r1 = service.bookRoom("Arun", "Single Room");
-        Reservation r2 = service.bookRoom("Priya", "Double Room");
-        Reservation r3 = service.bookRoom("Ravi", "Suite Room");
+        try {
+            service.bookRoom("Arun", "Single Room");
+            service.bookRoom("Priya", "Double Room");
+            service.bookRoom("Ravi", "Suite Room");
+        } catch (Exception e) {
+            System.out.println("Booking Failed: " + e.getMessage());
+        }
 
         System.out.println();
-
-        service.cancelReservation(r2.getRoomId());
-        service.cancelReservation("INVALID_ID");
-
-        System.out.println();
-
         inventory.displayInventory();
         service.displayAllocations();
+
+        service.saveState(filename);
+        System.out.println("\nSystem state saved successfully.");
     }
 }

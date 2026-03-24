@@ -1,59 +1,27 @@
-
 import java.util.*;
+import java.util.concurrent.*;
 
-abstract class Room {
-    private String type;
-    private int beds;
-    private double price;
+class Reservation {
+    private String guestName;
+    private String roomType;
+    private String roomId;
 
-    public Room(String type, int beds, double price) {
-        this.type = type;
-        this.beds = beds;
-        this.price = price;
+    public Reservation(String guestName, String roomType, String roomId) {
+        this.guestName = guestName;
+        this.roomType = roomType;
+        this.roomId = roomId;
     }
 
-    public String getType() {
-        return type;
+    public String getGuestName() {
+        return guestName;
     }
 
-    public int getBeds() {
-        return beds;
+    public String getRoomType() {
+        return roomType;
     }
 
-    public double getPrice() {
-        return price;
-    }
-
-    public abstract void displayDetails();
-}
-
-class SingleRoom extends Room {
-    public SingleRoom() {
-        super("Single Room", 1, 1000);
-    }
-
-    public void displayDetails() {
-        System.out.println("Type: " + getType() + ", Beds: " + getBeds() + ", Price: ₹" + getPrice());
-    }
-}
-
-class DoubleRoom extends Room {
-    public DoubleRoom() {
-        super("Double Room", 2, 2000);
-    }
-
-    public void displayDetails() {
-        System.out.println("Type: " + getType() + ", Beds: " + getBeds() + ", Price: ₹" + getPrice());
-    }
-}
-
-class SuiteRoom extends Room {
-    public SuiteRoom() {
-        super("Suite Room", 3, 5000);
-    }
-
-    public void displayDetails() {
-        System.out.println("Type: " + getType() + ", Beds: " + getBeds() + ", Price: ₹" + getPrice());
+    public String getRoomId() {
+        return roomId;
     }
 }
 
@@ -64,50 +32,95 @@ class RoomInventory {
         inventory = new HashMap<>();
         inventory.put("Single Room", 5);
         inventory.put("Double Room", 3);
-        inventory.put("Suite Room", 0);
+        inventory.put("Suite Room", 2);
     }
 
-    public int getAvailability(String roomType) {
-        return inventory.getOrDefault(roomType, 0);
+    public synchronized boolean reduceRoom(String type) {
+        int available = inventory.getOrDefault(type, 0);
+        if (available <= 0) return false;
+        inventory.put(type, available - 1);
+        return true;
+    }
+
+    public synchronized void increaseRoom(String type) {
+        inventory.put(type, inventory.getOrDefault(type, 0) + 1);
+    }
+
+    public synchronized void displayInventory() {
+        System.out.println("Inventory: " + inventory);
     }
 }
 
-class RoomSearchService {
+class BookingService {
     private RoomInventory inventory;
-    private List<Room> rooms;
+    private Set<String> allocatedRoomIds;
+    private Map<String, Set<String>> roomAllocations;
+    private int idCounter = 1;
 
-    public RoomSearchService(RoomInventory inventory, List<Room> rooms) {
+    public BookingService(RoomInventory inventory) {
         this.inventory = inventory;
-        this.rooms = rooms;
+        allocatedRoomIds = Collections.synchronizedSet(new HashSet<>());
+        roomAllocations = new ConcurrentHashMap<>();
     }
 
-    public void searchAvailableRooms() {
-        System.out.println("===== Available Rooms =====");
+    private synchronized String generateRoomId(String type) {
+        String id;
+        do {
+            id = type.substring(0, 2).toUpperCase() + idCounter++;
+        } while (allocatedRoomIds.contains(id));
+        return id;
+    }
 
-        for (Room room : rooms) {
-            int available = inventory.getAvailability(room.getType());
-
-            if (available > 0) {
-                room.displayDetails();
-                System.out.println("Available: " + available);
-                System.out.println("--------------------------");
+    public Reservation bookRoom(String guestName, String roomType) {
+        synchronized (this) {
+            if (!inventory.reduceRoom(roomType)) {
+                System.out.println("Booking Failed: " + guestName + " -> " + roomType + " (No availability)");
+                return null;
             }
+
+            String roomId = generateRoomId(roomType);
+            allocatedRoomIds.add(roomId);
+            roomAllocations.putIfAbsent(roomType, Collections.synchronizedSet(new HashSet<>()));
+            roomAllocations.get(roomType).add(roomId);
+
+            System.out.println("Confirmed: " + guestName + " -> " + roomType + " | Room ID: " + roomId);
+            return new Reservation(guestName, roomType, roomId);
         }
+    }
+
+    public void displayAllocations() {
+        System.out.println("Current Allocations: " + roomAllocations);
     }
 }
 
 public class BookMyStay {
-    public static void main(String[] args) {
+    public static void main(String[] args) throws InterruptedException {
 
         RoomInventory inventory = new RoomInventory();
+        BookingService service = new BookingService(inventory);
 
-        List<Room> rooms = new ArrayList<>();
-        rooms.add(new SingleRoom());
-        rooms.add(new DoubleRoom());
-        rooms.add(new SuiteRoom());
+        ExecutorService executor = Executors.newFixedThreadPool(5);
 
-        RoomSearchService searchService = new RoomSearchService(inventory, rooms);
+        String[][] requests = {
+                {"Arun", "Single Room"},
+                {"Priya", "Single Room"},
+                {"Karthik", "Single Room"},
+                {"Divya", "Double Room"},
+                {"Ravi", "Suite Room"},
+                {"Anita", "Double Room"},
+                {"Suresh", "Suite Room"},
+                {"Maya", "Single Room"}
+        };
 
-        searchService.searchAvailableRooms();
+        for (String[] req : requests) {
+            executor.submit(() -> service.bookRoom(req[0], req[1]));
+        }
+
+        executor.shutdown();
+        executor.awaitTermination(5, TimeUnit.SECONDS);
+
+        System.out.println();
+        inventory.displayInventory();
+        service.displayAllocations();
     }
 }
